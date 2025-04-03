@@ -1,0 +1,132 @@
+#!/bin/bash
+
+# current building assuming the dependencies are resolved 
+
+#-------------------------------script user controls and components ----------------------------#
+
+buffer="";
+
+# later in working must be taken form initrial setup config 
+open_editor() {
+  sudo /usr/local/bin/nvimc -f $1;
+}
+
+# path validator for gum bug 
+validate_path() {
+  if [[ $1 == ""  ]]; then
+    exit 1;
+  fi
+}
+
+# check for existing containers 
+is_exists_container() {
+  if [[ $(docker ps | wc -l ) -eq 1 ]]; then
+    exit 1;
+  fi
+}
+
+# check for existing volume 
+is_exists_volume() {
+  if [[ $(docker volume ls | wc -l) -eq 1 ]]; then 
+    exit 1;
+  fi
+}
+
+# check for existing bind mounts 
+is_exists_bind() {
+  if [[ $(docker ps --format '{{.ID}}' | xargs -I {} docker inspect --format '{{with .Mounts}}{{range .}}{{if eq .Type "bind"}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}{{end}}' {} | wc -l) -eq 1 ]]; then
+    exit 1
+  fi
+}
+
+# Helper function: select container file   
+select_container_file() {
+  sudo $(which gum) file --directory $(docker inspect $(docker ps | awk 'NR!=1{ print }' | gum choose | awk '{ print $1 }') --format {{.GraphDriver.Data.MergedDir}})
+}
+
+# Helper function: select host file
+select_host_file() {
+  sudo $(which gum) file --directory $1
+}
+
+# Helper function: select bind mount file 
+select_bind_file() {
+  gum choose  "$(docker ps --format '{{.ID}}' | xargs -I {} sh -c 'docker inspect {} --format "{{with .Mounts}}{{range .}}{{if eq .Type \"bind\"}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}{{end}}"')" | awk '{ print $3 }'
+  
+}
+
+# Helper function: select volume file 
+select_volume_file() {
+  docker volume ls | awk 'NR!=1{ print }' | gum choose | awk '{ print $2 }' | xargs docker inspect --format {{.Mountpoint}} 2> /dev/null  
+}
+
+select_object_file() {
+  OBJECT_TYPE_SELECTION=$(gum choose "Container" "Volume" "Bind" "Host" "Exit")
+  if [[ $OBJECT_TYPE_SELECTION == "Container" ]]; then
+      buffer=$(is_exists_container && select_container_file | xargs echo);
+      validate_path $buffer && echo $buffer;
+      buffer="";
+      exit 0;
+  elif [[ $OBJECT_TYPE_SELECTION == "Volume" ]]; then
+      buffer=$(is_exists_volume && select_volume_file | xargs echo);
+      validate_path $buffer && echo $buffer;
+      buffer="";
+      exit 0;
+  elif [[ $OBJECT_TYPE_SELECTION == "Bind" ]]; then
+      buffer=$(is_exists_bind && select_bind_file | xargs echo);
+      echo $buffer
+      validate_path $buffer && echo $buffer;
+      buffer="";
+      exit 0;
+  elif [[ $OBJECT_TYPE_SELECTION == "Exit" ]]; then
+      echo "exit manually"
+      exit 0;
+  elif [[ $OBJECT_TYPE_SELECTION == "Host" ]]; then
+      buffer=$(select_host_file | xargs echo);
+      validate_path $buffer && echo $buffer
+      buffer=""
+      exit 0;
+  else 
+      exit 0;
+  fi
+}
+####################################################################################################################################
+# Evaluating all options and arguments 
+NUMBER_OF_ARGUMENTS=$#
+if [[ $NUMBER_OF_ARGUMENTS -eq 0 ]]; then
+  echo "NO ARGUMENT PASSED...."
+  exit 0
+else
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --navigate)
+          open_editor $(select_object_file);
+          exit 0;
+      shift 2
+      ;;
+      --transfer)
+          # select the object type between transfer occurs 
+          SELECT_TRANSFER_TYPE=$(gum choose "Copy" "Move" "Exit");
+          if [[ $SELECT_TRANSFER_TYPE == "Copy" ]]; then 
+            ACTION="cp -r";
+          elif [[ $SELECT_TRANSFER_TYPE == "Move" ]]; then
+            ACTION="mv -r"
+          elif [[ $SELECT_TRANSFER_TYPE == "Exit" ]]; then
+            exit 0;
+          else
+            exit 1;
+          fi
+          # echo $ACTION
+          SELECT_TRANSFER_SOURCE=$(select_object_file)
+          SELECT_TRANSFER_DESTINATION=$(select_object_file)
+          sudo $ACTION $SELECT_TRANSFER_SOURCE $SELECT_TRANSFER_DESTINATION 
+          exit 0;
+      shift 2
+      ;;
+      *)
+        echo "Unknown option: $1"
+        shift 
+        ;;
+    esac
+  done
+fi 
