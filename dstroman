@@ -8,7 +8,8 @@ buffer="";
 
 # later in working must be taken form initrial setup config 
 open_editor() {
-  sudo /usr/local/bin/nvimc -f $1;
+  echo $1
+  # sudo /usr/local/bin/nvimc -f $1;
 }
 
 # path validator for gum bug 
@@ -34,14 +35,14 @@ is_exists_volume() {
 
 # check for existing bind mounts 
 is_exists_bind() {
-  if [[ $(docker ps --format '{{.ID}}' | xargs -I {} docker inspect --format '{{with .Mounts}}{{range .}}{{if eq .Type "bind"}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}{{end}}' {} | wc -l) -eq 1 ]]; then
+  if [[ $(docker ps | awk 'NR!=1{ print $1 }' | xargs docker inspect --format "{{with .Mounts}}{{range .}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}" 2> /dev/null | awk 'NF' | wc -l) -eq 0 ]]; then
     exit 1
   fi
 }
 
 # Helper function: select container file   
 select_container_file() {
-  sudo $(which gum) file --directory $(docker inspect $(docker ps | awk 'NR!=1{ print }' | gum choose | awk '{ print $1 }') --format {{.GraphDriver.Data.MergedDir}})
+  sudo $(which gum) file --directory $(docker inspect $(docker ps | awk 'NR!=1{ print }' | gum choose | awk '{ print $1 }') --format {{.GraphDriver.Data.MergedDir}}) 
 }
 
 # Helper function: select host file
@@ -51,13 +52,21 @@ select_host_file() {
 
 # Helper function: select bind mount file 
 select_bind_file() {
-  gum choose  "$(docker ps --format '{{.ID}}' | xargs -I {} sh -c 'docker inspect {} --format "{{with .Mounts}}{{range .}}{{if eq .Type \"bind\"}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}{{end}}"')" | awk '{ print $3 }'
-  
+  docker ps | awk 'NR!=1{ print $1 }' | xargs docker inspect --format "{{with .Mounts}}{{range .}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}" | awk 'NF' | gum choose | awk '{ print $3 }' | xargs gum file --directory | xargs echo  
+}
+
+select_volume() {
+    docker volume ls | awk 'NR!=1{ print }' | gum choose | awk '{ print $2 }' | xargs docker inspect --format {{.Mountpoint}} 2> /dev/null  
 }
 
 # Helper function: select volume file 
 select_volume_file() {
-  docker volume ls | awk 'NR!=1{ print }' | gum choose | awk '{ print $2 }' | xargs docker inspect --format {{.Mountpoint}} 2> /dev/null  
+   volume=$(select_volume);
+   if [[ $(sudo ls -A $volume | wc -l) -eq 0 ]]; then 
+     echo "$volume"
+   else 
+     sudo $(which gum) file --directory $volume | xargs echo 
+   fi
 }
 
 select_object_file() {
