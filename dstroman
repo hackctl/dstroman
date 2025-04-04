@@ -34,7 +34,7 @@ is_exists_volume() {
 
 # check for existing bind mounts 
 is_exists_bind() {
-  if [[ $(docker ps --format '{{.ID}}' | xargs -I {} docker inspect --format '{{with .Mounts}}{{range .}}{{if eq .Type "bind"}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}{{end}}' {} | wc -l) -eq 1 ]]; then
+  if [[ $(docker ps | awk 'NR!=1{ print $1 }' | xargs docker inspect --format "{{with .Mounts}}{{range .}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}" 2> /dev/null | awk 'NF' | wc -l) -eq 0 ]]; then
     exit 1
   fi
 }
@@ -51,8 +51,7 @@ select_host_file() {
 
 # Helper function: select bind mount file 
 select_bind_file() {
-  gum choose  "$(docker ps --format '{{.ID}}' | xargs -I {} sh -c 'docker inspect {} --format "{{with .Mounts}}{{range .}}{{if eq .Type \"bind\"}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}{{end}}"')" | awk '{ print $3 }'
-  
+  docker ps | awk 'NR!=1{ print $1 }' | xargs docker inspect --format "{{with .Mounts}}{{range .}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}" | awk 'NF' | gum choose | awk '{ print $3 }' 
 }
 
 # Helper function: select volume file 
