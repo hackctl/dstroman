@@ -1,0 +1,244 @@
+#!/bin/bash
+
+#----------------------------------------------------------handling dependencies -------------------------------------------------------#
+
+check_and_install_dependencies() { 
+  if [[ ! -e ~/.config/dstroman/backups ]]; then 
+    mkdir -p ~/.config/dstroman/backups 
+  fi
+
+  if [[ ! -e ~/.config/dstroman/editor ]]; then
+    touch ~/.config/dstroman/editor
+    echo "echo" >  ~/.config/dstroman/editor
+  fi 
+} 
+check_and_install_dependencies
+
+#--------------------------------------------------script user controls and components -------------------------------------------------#
+
+# later in working must be taken form initrial setup config 
+open_editor() {
+  sudo $(cat ~/.config/dstroman/editor) $1;
+}
+
+# path validator for gum bug (-z sucked)
+validate_empty() {
+  if [[ $1 == ""  ]]; then
+    exit 1;
+  fi
+}
+
+# check for existing containers 
+is_exists_container() {
+  if [[ $(docker ps | wc -l ) -eq 1 ]]; then
+    exit 1;
+  fi
+}
+
+# check for existing volume 
+is_exists_volume() {
+  if [[ $(docker volume ls | wc -l) -eq 1 ]]; then 
+    exit 1;
+  fi
+}
+
+# check for existing bind mounts 
+is_exists_bind() {
+  if [[ $(docker ps | awk 'NR!=1{ print $1 }' | xargs docker inspect --format "{{with .Mounts}}{{range .}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}" 2> /dev/null | awk 'NF' | wc -l) -eq 0 ]]; then
+    exit 1
+  fi
+}
+
+# Helper function: selecting the volume 
+select_volume() {
+  docker volume ls | awk 'NR!=1{ print }' | gum choose | awk '{ print $2 }' | xargs docker inspect --format {{.Mountpoint}} 2> /dev/null  | xargs echo 
+} 
+
+# Helper function: selecting the bind 
+select_bind() {
+  docker ps | awk 'NR!=1{ print $1 }' | xargs docker inspect --format "{{with .Mounts}}{{range .}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}" | awk 'NF' | gum choose | awk '{ print $3 }' | xargs echo 
+}
+
+# Helper function: selecting the container 
+select_container() {
+  docker inspect $(docker ps | awk 'NR!=1{ print }' | gum choose | awk '{ print $1 }') --format {{.GraphDriver.Data.MergedDir}} 2> /dev/null | xargs echo 
+}
+
+# Helper function: select container file   
+select_container_file() {  
+  local SELECTED_CONTAINER=$(select_container);
+  validate_empty $SELECTED_CONTAINER
+  sudo $(which gum) file --directory $SELECTED_CONTAINER | xargs echo 
+}
+
+# Helper function: select host file
+select_host_file() {
+  sudo $(which gum) file --directory "$1" | xargs echo 
+}
+
+# Helper function: select bind mount file 
+select_bind_file() {
+  docker ps | awk 'NR!=1{ print $1 }' | xargs docker inspect --format "{{with .Mounts}}{{range .}}{{$.ID}} {{$.Name}} {{.Source}} {{.Destination}}{{end}}{{end}}" | awk 'NF' | gum choose | awk '{ print $3 }' | while read path; do [[ -d "$path" ]] && gum file --directory "$path" || echo "$path"; done | xargs echo 
+}
+
+# Helper function: select volume file 
+select_volume_file() {
+   local SELECTED_VOLUME=$(select_volume)
+   validate_empty "$SELECTED_VOLUME"
+   if [[ $(sudo ls -A "$SELECTED_VOLUME" | wc -l) -eq 0 ]]; then 
+     echo "$SELECTED_VOLUME"
+   else 
+     sudo $(which gum) file --directory "$SELECTED_VOLUME" | xargs echo 
+   fi
+}
+
+select_object_file() {
+  local SELECTED_OBJECT_TYPE=$(gum choose "Container" "Volume" "Bind" "Host" "Exit")
+  if [[ $SELECTED_OBJECT_TYPE == "Container" ]]; then
+      local SELECTED_OBJECT_FILE=$(is_exists_container && select_container_file | xargs echo)
+      validate_empty "$SELECTED_OBJECT_FILE" && echo "$SELECTED_OBJECT_FILE"
+      exit 0
+  elif [[ $SELECTED_OBJECT_TYPE == "Volume" ]]; then
+      local SELECTED_OBJECT_FILE=$(is_exists_volume && select_volume_file | xargs echo)
+      validate_empty "$SELECTED_OBJECT_FILE" && echo "$SELECTED_OBJECT_FILE"
+      exit 0
+  elif [[ $SELECTED_OBJECT_TYPE == "Bind" ]]; then
+      local SELECTED_OBJECT_FILE=$(is_exists_bind && select_bind_file | xargs echo)
+      validate_empty "$SELECTED_OBJECT_FILE" && echo "$SELECTED_OBJECT_FILE"
+      exit 0
+  elif [[ $SELECTED_OBJECT_TYPE == "Exit" ]]; then
+      echo "exit manually"
+      exit 0
+  elif [[ $SELECTED_OBJECT_TYPE == "Host" ]]; then
+      local SELECTED_OBJECT_FILE=$(select_host_file | xargs echo)
+      validate_empty "$SELECTED_OBJECT_FILE" && echo "$SELECTED_OBJECT_FILE"
+      exit 0
+  else 
+      exit 0
+  fi
+}
+
+select_object() {
+  local SELECTED_OBJECT_TYPE=$(gum choose "Container" "Volume" "Bind" "Exit")
+  if [[ $SELECTED_OBJECT_TYPE == "Container" ]]; then
+      local SELECTED_OBJECT_FILE=$(is_exists_container && select_container | xargs echo)
+      validate_empty "$SELECTED_OBJECT_FILE" && echo "$SELECTED_OBJECT_FILE"
+      exit 0
+  elif [[ $SELECTED_OBJECT_TYPE == "Volume" ]]; then
+      local SELECTED_OBJECT_FILE=$(is_exists_volume && select_volume | xargs echo)
+      validate_empty "$SELECTED_OBJECT_FILE" && echo "$SELECTED_OBJECT_FILE"
+      exit 0
+  elif [[ $SELECTED_OBJECT_TYPE == "Bind" ]]; then
+      local SELECTED_OBJECT_FILE=$(is_exists_bind && select_bind | xargs echo)
+      validate_empty "$SELECTED_OBJECT_FILE" && echo "$SELECTED_OBJECT_FILE"
+      exit 0
+  elif [[ $SELECTED_OBJECT_TYPE == "Exit" ]]; then
+      echo "Exited manually"
+      exit 0
+  else 
+      exit 0
+  fi
+}
+
+input_name() {
+  local NAME=""
+  until [[ "$NAME" =~ ^[a-zA-Z0-9]+$ ]]; do
+    read -p "Enter alphanumeric name for backup file " NAME
+    [[ "$NAME" =~ ^[a-zA-Z0-9]+$ ]] || echo "Invalid input. Only letters and numbers are allowed."
+  done
+  echo "$NAME"
+}
+
+####################################################################################################################################
+# Evaluating all options and arguments 
+NUMBER_OF_ARGUMENTS=$#
+if [[ $NUMBER_OF_ARGUMENTS -eq 0 ]]; then
+  echo "NO ARGUMENT PASSED...."
+  exit 0
+else
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --help)
+          echo "
+
+          $> dstroman [OPTION] [ARGUMENT]
+
+          OPTION/FLAG         ARGUMENT        USECASE        
+          --navigate          <none>          To edit traverse docker objects's file system 
+          --transfer          <none>          To transfer files in between docker objects
+          --list-backups      <none>          List all the backups 
+          --create-backup     <none>          To create backup of object like container or object files 
+          --remove-backup     <none>          To delete backup
+
+          "
+          exit 0;
+      shift 2;
+      ;;
+      --navigate)
+	        SELECTED_OBJECT_FILE=$(select_object_file);
+	        validate_empty $SELECTED_OBJECT_FILE
+	        open_editor $SELECTED_OBJECT_FILE
+          exit 0
+      shift 2
+      ;;
+      --transfer) 
+          SELECTED_TRANSFER_TYPE=$(gum choose "Copy" "Move" "Exit")
+          if [[ $SELECTED_TRANSFER_TYPE == "Copy" ]]; then 
+            ACTION="cp -r"
+          elif [[ $SELECTED_TRANSFER_TYPE == "Move" ]]; then
+            ACTION="mv -r"
+          elif [[ $SELECTED_TRANSFER_TYPE == "Exit" ]]; then
+            exit 0
+          else
+            exit 1
+          fi
+          SELECTED_TRANSFER_SOURCE=$(select_object_file)
+          SELECTED_TRANSFER_DESTINATION=$(select_object_file)
+          sudo $ACTION "$SELECTED_TRANSFER_SOURCE" "$SELECTED_TRANSFER_DESTINATION" 2> /dev/null
+          exit 0
+      shift 2
+      ;;
+    --list-backups)
+          if [[ $(sudo ls -A ~/.config/dstroman/backups | wc -l) -eq 0 ]]; then 
+            echo "No backups found"
+          else
+            ls ~/.config/dstroman/backups
+          fi
+          exit 0
+      shift 2
+      ;;
+    --create-backup) 
+          SELECTED_BACKUP_TYPE=$(gum choose "Object-file" "Object" "Exit")
+          if [[ $SELECTED_BACKUP_TYPE == "Object" ]]; then 
+            SELECTED_BACKUP_FILE=$(select_object)
+          elif [[ $SELECTED_BACKUP_TYPE == "Object-file" ]]; then
+            SELECTED_BACKUP_FILE=$(select_object_file)
+          elif [[ $SELECTED_BACKUP_TYPE == "Exit" ]]; then
+            exit 0
+          else
+            exit 1
+          fi
+          validate_empty "$SELECTED_BACKUP_FILE"
+          BACKUP_NAME=$(input_name)
+          sudo cp -r "$SELECTED_BACKUP_FILE" ~/.config/dstroman/backups/"$BACKUP_NAME"
+          exit 0
+      shift 2
+      ;;
+    --remove-backup)  
+          if [[ $(sudo ls -A ~/.config/dstroman/backups | wc -l) -eq 0 ]]; then 
+            echo "No backups found"
+          else
+            SELECTED_BACKUP=$(gum choose $(ls  ~/.config/dstroman/backups))
+            validate_empty "$SELECTED_BACKUP"
+            sudo rm -r ~/.config/dstroman/backups/"$SELECTED_BACKUP"
+          fi
+          exit 0
+      shift 2
+      ;;
+      *)
+        echo "Unknown option: $1"
+        shift 
+        ;;
+    esac
+  done
+fi
